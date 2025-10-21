@@ -180,7 +180,7 @@
         const GLOBAL_UNLOCK_KEY = 'global_unlock_until', DAILY_UNLOCK_COUNT_KEY = 'daily_unlock_count';
         let DAILY_UNLOCK_LIMIT = 15;
         const UNLOCK_DURATION = 24 * 60 * 60 * 1000;
-        const AD_WATCH_DURATION = 15000; // 15 seconds (15 seconds)
+        // const AD_WATCH_DURATION = 15000; // 15 seconds (15 seconds) - এই লাইনটি মুছে ফেলা হয়েছে বা মন্তব্য করা হয়েছে
 
         document.addEventListener("DOMContentLoaded", () => {
             const pageLoader = document.getElementById('pageLoader');
@@ -223,7 +223,8 @@
                     }
 
                     DAILY_UNLOCK_LIMIT = settings.unlock_count || 15;
-                    const rulesText = (settings.rules_text || `আপনি যদি ${DAILY_UNLOCK_LIMIT} টি ভিডিও দেখেন তাহলে আপনি পরবর্তী ২৪ ঘন্টার জন্য সকল ভিডিও বিজ্ঞাপন বিহীন উপভোগ করতে পারবেন।`) + "\n\nআনলক করার জন্য বাটন ক্লিক করে সম্পূর্ণ এড না দেখলে আনলক হবে না।১৫ সেকেন্ডের আগে ফিরে এলে আনলক হবে না।";
+                    // এখানে rulesText থেকে ১৫ সেকেন্ডের শর্তটি বাদ দেওয়া হয়েছে
+                    const rulesText = (settings.rules_text || `আপনি যদি ${DAILY_UNLOCK_LIMIT} টি ভিডিও দেখেন তাহলে আপনি পরবর্তী ২৪ ঘন্টার জন্য সকল ভিডিও বিজ্ঞাপন বিহীন উপভোগ করতে পারবেন।`);
                     document.getElementById('rules-text').innerText = rulesText;
                 }
 
@@ -344,11 +345,9 @@
             const adScript = document.getElementById('ad-sdk-script');
             const zoneId = adScript.getAttribute('data-zone');
             
-            // If zoneId is not set or empty, do not show ad
+            // If zoneId is not set or empty, directly return true (unlock video) without showing any alert
             if (!zoneId || zoneId.trim() === '') {
-                // If no zone ID, perhaps directly unlock or show a message then unlock
-                alert("বিজ্ঞাপন লোড হয়নি। সরাসরি ভিডিও প্লেয়ার খুলছে।");
-                return true; // Treat as if ad was 'watched' if no ad configured
+                return true; 
             }
 
             const adFunc = window[`show_${zoneId}`];
@@ -357,16 +356,15 @@
                 const originalOpen = window.open;
                 let adOpenedSuccessfully = false;
 
-                // Temporarily override window.open to track if if a new window is opened by the ad SDK
+                // Temporarily override window.open to track if a new window is opened by the ad SDK
                 window.open = function(url, name, features) {
                     const newWindow = originalOpen.apply(this, arguments);
-                    // A small delay to allow the newWindow to be fully initialized and associated with the DOM
-                    setTimeout(() => {
+                    setTimeout(() => { // Give a moment for the window to be properly set
                         if (newWindow && !newWindow.closed && typeof newWindow.closed !== 'undefined') {
                             adWindow = newWindow;
                             adOpenedSuccessfully = true;
                         }
-                    }, 100); // 100ms delay
+                    }, 100); 
                     return newWindow;
                 };
 
@@ -379,62 +377,28 @@
                     // Restore original window.open immediately after adFunc is called.
                     window.open = originalOpen;
 
-                    // If ad window was never opened or immediately closed/blocked
+                    // If ad window was never opened or immediately closed/blocked, return false silently
                     if (!adOpenedSuccessfully || adWindow === null || adWindow.closed || typeof adWindow.closed === 'undefined') {
-                        alert("বিজ্ঞাপন লোড হয়নি অথবা পপআপ ব্লক করা হয়েছে। অনুগ্রহ করে পপআপ আনব্লক করুন।");
-                        return false;
+                        // No alert shown here, just fail silently.
+                        return false; 
                     }
-
-                    const adStartTime = Date.now();
-                    let adWatchedForDuration = false;
-
-                    await Promise.race([
-                        // Promise that resolves if the ad window is closed prematurely
-                        new Promise(resolve => {
-                            const closeCheckInterval = setInterval(() => {
-                                if (adWindow.closed) {
-                                    clearInterval(closeCheckInterval);
-                                    resolve('closed');
-                                }
-                            }, 500); // Check every half second
-                        }),
-                        // Promise that resolves after the AD_WATCH_DURATION
-                        new Promise(resolve => {
-                            setTimeout(() => {
-                                resolve('duration_met');
-                            }, AD_WATCH_DURATION);
-                        })
-                    ]).then(result => {
-                        if (result === 'duration_met') {
-                            adWatchedForDuration = true;
-                        }
-                    });
-
-                    // After the promise resolves, evaluate the outcome
-                    if (adWatchedForDuration) {
-                        // If the ad window is still open after duration, close it.
-                        if (!adWindow.closed) {
-                            adWindow.close(); 
-                        }
-                        const today = new Date().toISOString().slice(0, 10);
-                        db.ref('analytics/total_ad_clicks').transaction(c => (c || 0) + 1);
-                        db.ref(`analytics/daily_ad_clicks/${today}`).transaction(c => (c || 0) + 1);
-                        return true; // Ad watched successfully, unlock video
-                    } else {
-                        // Ad window was closed before duration elapsed
-                        alert("বিজ্ঞাপনটি পুরো ১৫ সেকেন্ড দেখতে হবে অথবা বন্ধ করা যাবে না।");
-                        return false; // Ad not watched for full duration
-                    }
+                    
+                    // If ad opened successfully, assume it's watched and unlock.
+                    // No more waiting for AD_WATCH_DURATION
+                    const today = new Date().toISOString().slice(0, 10);
+                    db.ref('analytics/total_ad_clicks').transaction(c => (c || 0) + 1);
+                    db.ref(`analytics/daily_ad_clicks/${today}`).transaction(c => (c || 0) + 1);
+                    return true; // Ad opened successfully, unlock video
+                    
                 } catch (e) { 
                     console.error("Ad error:", e); 
                     window.open = originalOpen; // Ensure original window.open is restored on error
-                    alert("বিজ্ঞাপন লোড হতে সমস্যা হয়েছে।");
+                    // No alert shown here, just fail silently.
                     return false; 
                 }
             } else { 
-                // adFunc not found, likely SDK not loaded or zoneId is wrong.
-                alert("বিজ্ঞাপন লোড হতে সমস্যা হয়েছে (ফাংশন খুঁজে পাওয়া যায়নি)। সরাসরি ভিডিও প্লেয়ার খুলছে।");
-                return true; // Fallback: allow unlock if ad system is not functional
+                // adFunc not found, likely SDK not loaded or zoneId is wrong. Silently allow unlock.
+                return true; 
             }
         }
 
@@ -509,8 +473,8 @@
                 if (searchVal.trim()) handleSearch({ target: { value: searchVal } }); 
                 else switchTab(activeCategory, currentPage);
             } else {
-                // If ad was not successful (e.g., closed prematurely, blocked)
-                alert("বিজ্ঞাপনটি সফলভাবে দেখা হয়নি, তাই ভিডিও আনলক করা যাবে না।");
+                // If ad was not successful (e.g., closed prematurely, blocked), show a generic message or no message
+                alert("ভিডিও আনলক করতে সমস্যা হয়েছে। অনুগ্রহ করে আবার চেষ্টা করুন।"); // আপনি চাইলে এই মেসেজটিও মুছে দিতে পারেন।
             }
         }
 
