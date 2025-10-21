@@ -180,7 +180,7 @@
         const GLOBAL_UNLOCK_KEY = 'global_unlock_until', DAILY_UNLOCK_COUNT_KEY = 'daily_unlock_count';
         let DAILY_UNLOCK_LIMIT = 15;
         const UNLOCK_DURATION = 24 * 60 * 60 * 1000;
-        const AD_WATCH_DURATION = 15000; // 15 seconds
+        const AD_WATCH_DURATION = 15000; // 15 seconds (15 seconds)
 
         document.addEventListener("DOMContentLoaded", () => {
             const pageLoader = document.getElementById('pageLoader');
@@ -346,7 +346,9 @@
             
             // If zoneId is not set or empty, do not show ad
             if (!zoneId || zoneId.trim() === '') {
-                return false; 
+                // If no zone ID, perhaps directly unlock or show a message then unlock
+                alert("বিজ্ঞাপন লোড হয়নি। সরাসরি ভিডিও প্লেয়ার খুলছে।");
+                return true; // Treat as if ad was 'watched' if no ad configured
             }
 
             const adFunc = window[`show_${zoneId}`];
@@ -357,7 +359,8 @@
 
                 // Temporarily override window.open to track if an ad popup opens
                 window.open = function(url, name, features) {
-                    if (url && url.includes("monetag.com")) { // Check if it's likely a monetag ad
+                    // Check for common Monetag domains. You might need to add more if Monetag uses others.
+                    if (url && (url.includes("monetag.com") || url.includes("bestweb.site") || url.includes("ssp-serve.com") || url.includes("adskeeper.co.uk"))) { 
                         adWindow = originalOpen.apply(this, arguments);
                         if (adWindow) {
                             adShownSuccessfully = true;
@@ -368,48 +371,64 @@
                 };
 
                 try {
-                    await adFunc();
-                    
-                    // Restore original window.open
+                    await adFunc(); // Attempt to show the ad
+
+                    // Restore original window.open immediately after adFunc is called.
+                    // This is crucial to prevent interference with other popups.
                     window.open = originalOpen;
 
+                    // Now, we wait for the ad to be watched for the duration.
                     if (adShownSuccessfully && adWindow && !adWindow.closed) {
                         const adStartTime = Date.now();
-                        // Wait for AD_WATCH_DURATION or until ad window is closed
+                        
+                        let adWatchedForDuration = false;
+
                         await new Promise(resolve => {
                             const checkAd = setInterval(() => {
-                                if (adWindow.closed || (Date.now() - adStartTime >= AD_WATCH_DURATION)) {
+                                // If ad window is closed prematurely by user
+                                if (adWindow.closed) {
                                     clearInterval(checkAd);
                                     resolve();
                                 }
-                            }, 500);
+                                // If AD_WATCH_DURATION has passed
+                                if (Date.now() - adStartTime >= AD_WATCH_DURATION) {
+                                    clearInterval(checkAd);
+                                    adWatchedForDuration = true; // Mark as watched
+                                    resolve();
+                                }
+                            }, 500); // Check every half second
                         });
 
-                        // Check if 15 seconds passed AND ad window was not closed prematurely
-                        if (Date.now() - adStartTime >= AD_WATCH_DURATION && !adWindow.closed) {
-                            // Close the ad window after 15 seconds
-                            adWindow.close();
+                        // After the promise resolves, evaluate the outcome
+                        if (adWatchedForDuration) {
+                            // If the ad window is still open after duration, close it.
+                            if (!adWindow.closed) {
+                                adWindow.close(); 
+                            }
                             const today = new Date().toISOString().slice(0, 10);
                             db.ref('analytics/total_ad_clicks').transaction(c => (c || 0) + 1);
                             db.ref(`analytics/daily_ad_clicks/${today}`).transaction(c => (c || 0) + 1);
-                            return true; // Ad watched successfully
+                            return true; // Ad watched successfully, unlock video
                         } else {
+                            // Ad window was closed before duration elapsed
                             alert("বিজ্ঞাপনটি পুরো ১৫ সেকেন্ড দেখতে হবে অথবা বন্ধ করা যাবে না।");
                             return false; // Ad not watched for full duration
                         }
                     } else {
+                        // Ad did not show up, or was blocked, or closed immediately
                         alert("বিজ্ঞাপন লোড হয়নি অথবা পপআপ ব্লক করা হয়েছে। অনুগ্রহ করে পপআপ আনব্লক করুন।");
-                        return false; // Ad did not show up or was blocked
+                        return false; 
                     }
                 } catch (e) { 
                     console.error("Ad error:", e); 
-                    window.open = originalOpen; // Restore original window.open on error
+                    window.open = originalOpen; // Ensure original window.open is restored on error
                     alert("বিজ্ঞাপন লোড হতে সমস্যা হয়েছে।");
                     return false; 
                 }
             } else { 
-                alert("বিজ্ঞাপন লোড হয়নি। প্লেয়ার খুলছে।"); 
-                return false;
+                // adFunc not found, likely SDK not loaded or zoneId is wrong.
+                alert("বিজ্ঞাপন লোড হতে সমস্যা হয়েছে (ফাংশন খুঁজে পাওয়া যায়নি)। সরাসরি ভিডিও প্লেয়ার খুলছে।");
+                return true; // Fallback: allow unlock if ad system is not functional
             }
         }
 
@@ -484,6 +503,7 @@
                 if (searchVal.trim()) handleSearch({ target: { value: searchVal } }); 
                 else switchTab(activeCategory, currentPage);
             } else {
+                // If ad was not successful (e.g., closed prematurely, blocked)
                 alert("বিজ্ঞাপনটি সফলভাবে দেখা হয়নি, তাই ভিডিও আনলক করা যাবে না।");
             }
         }
